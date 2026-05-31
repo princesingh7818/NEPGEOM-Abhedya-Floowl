@@ -1795,7 +1795,7 @@ async function initializeApp() {
                         infiltration: parseFloat(document.getElementById('param-infiltration').value),
                         manning: parseFloat(document.getElementById('param-manning').value),
                         soil: document.getElementById('param-soil').value,
-                        resolution: document.getElementById('param-resolution').value,
+                        algorithm: document.getElementById('param-algorithm').value,
                         river_threshold: parseInt(document.getElementById('param-river-threshold').value),
                         display_threshold: parseInt(document.getElementById('param-display-threshold').value)
                     })

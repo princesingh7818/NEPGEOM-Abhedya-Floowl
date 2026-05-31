@@ -163,25 +163,66 @@ def compute_flood_susceptibility(dem, river_mask, transform,
     Scale-invariant — works identically at 500 m or 50 km.
 
     score = exp(-dist_m / L) * max(0, 1 - hand / H)
-
-    dist_m  = Euclidean distance to nearest river cell (metres)
-    hand    = Height Above Nearest Drainage (elevation above river)
-    L       = decay length — risk drops to 1/e at L metres
-    H       = max flood height — cells above this get zero risk
     """
     pixel_size_m = math.sqrt(abs(transform.a * transform.e))
-
     dist_pixels, hand = compute_river_proximity_and_hand(river_mask, dem)
     dist_m = dist_pixels * pixel_size_m
-
     dist_score = np.exp(-dist_m / max(decay_length_m, 1.0))
     hand_score = np.clip(1.0 - hand / max(max_flood_height_m, 0.1), 0, 1)
-
     return dist_score * hand_score
 
 
+def compute_flood_spread(dem, river_mask, transform,
+                          river_rise=2.0, diffusion=0.03, max_iter=500):
+    """
+    BFS flood spread: water rises at river channels and spreads to adjacent
+    low-lying cells with energy loss per step.
+    """
+    ny, nx = dem.shape
+    NEG_INF = -1e10
+    pixel_size_m = math.sqrt(abs(transform.a * transform.e))
+
+    water_level = np.full((ny, nx), NEG_INF, dtype=np.float64)
+    water_level[river_mask] = dem[river_mask] + river_rise
+    flooded = river_mask.copy()
+
+    for iteration in range(max_iter):
+        if not flooded.any():
+            break
+
+        pad_flooded = np.pad(flooded, 1, mode='constant', constant_values=False)
+        pad_water = np.pad(water_level, 1, mode='constant', constant_values=NEG_INF)
+        new_flooded = np.zeros_like(flooded, dtype=bool)
+
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+
+                nbr_fld = pad_flooded[1+dr:1+dr+ny, 1+dc:1+dc+nx]
+                nbr_wat = pad_water[1+dr:1+dr+ny, 1+dc:1+dc+nx]
+
+                adjacent = nbr_fld & ~flooded
+                incoming = nbr_wat - diffusion
+
+                can_flood = adjacent & (dem <= incoming)
+                new_wl = np.maximum(dem, incoming)
+
+                update = can_flood & (new_wl > water_level)
+                water_level = np.where(update, new_wl, water_level)
+                new_flooded = new_flooded | update
+
+        flooded = flooded | new_flooded
+        if not new_flooded.any():
+            break
+
+    flood_depth = np.maximum(water_level - dem, 0)
+    return flood_depth
+
+
 def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0,
-        river_threshold_pct=95, display_threshold_pct=75,
+        river_threshold_pct=95, display_threshold_pct=50,
+        algorithm='exp-hand',
         precipitation=25, duration=6,
         infiltration=10, manning_n=0.04, soil_type='loam',
         resolution='medium'):
@@ -224,16 +265,42 @@ def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0,
         river_mask = np.zeros_like(flow_acc, dtype=bool)
         river_mask[flow_acc == flow_acc.max()] = True
 
-    # Scale-invariant flood susceptibility
+    # Algorithm selection
     effective_rain_mm = effective_rain
     max_flood_height_H = np.clip(0.5 + effective_rain_mm / 200.0, 0.5, 20.0)
     decay_length_L = np.clip(150.0 / manning_factor, 30.0, 300.0)
 
-    flood_score = compute_flood_susceptibility(
-        dem, river_mask, transform,
-        decay_length_m=decay_length_L,
-        max_flood_height_m=max_flood_height_H
-    )
+    if algorithm == 'exp-hand':
+        flood_score = compute_flood_susceptibility(
+            dem, river_mask, transform,
+            decay_length_m=decay_length_L,
+            max_flood_height_m=max_flood_height_H
+        )
+        method_name = 'exp-hand'
+    elif algorithm == 'bfs-spread':
+        river_rise = np.clip(1.0 + effective_rain / 300.0, 1.0, 8.0)
+        diffusion = np.clip(0.03 * manning_factor, 0.01, 0.10)
+        flood_depth = compute_flood_spread(
+            dem, river_mask, transform,
+            river_rise=river_rise,
+            diffusion=diffusion,
+            max_iter=500
+        )
+        flood_score = np.where(flood_depth > 0.01, flood_depth, -1.0)
+        method_name = 'bfs-spread'
+    elif algorithm == 'proximity':
+        pixel_size_m = math.sqrt(abs(transform.a * transform.e))
+        dist_pixels, _ = compute_river_proximity_and_hand(river_mask, dem)
+        dist_m = dist_pixels * pixel_size_m
+        flood_score = np.exp(-dist_m / max(decay_length_L, 1.0))
+        method_name = 'proximity'
+    else:
+        flood_score = compute_flood_susceptibility(
+            dem, river_mask, transform,
+            decay_length_m=decay_length_L,
+            max_flood_height_m=max_flood_height_H
+        )
+        method_name = 'exp-hand'
 
     inv_transform = ~transform
     col0, row0 = inv_transform * (bounds['minLng'], bounds['maxLat'])
@@ -307,8 +374,9 @@ def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0,
         'bounds': bounds,
         'expanded_bounds': expanded_bounds,
         'shape': list(dem.shape) if png_filename else None,
-        'method': 'exponential_distance_decay_x_hand',
+        'method': method_name,
         'params': {
+            'algorithm': algorithm,
             'river_threshold_percentile': river_threshold_pct,
             'display_threshold_pct': display_threshold_pct,
             'precipitation_mm_hr': precipitation,
