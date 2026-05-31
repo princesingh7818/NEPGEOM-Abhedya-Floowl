@@ -19,6 +19,7 @@ body, html {
 #map {
     flex-grow: 1;
     height: 100%;
+    position: relative;
 }
 
 #ui-box {
@@ -91,7 +92,7 @@ body, html {
 
 /* Map controls (2D/3D, zoom, compass) */
 #map-controls {
-    position: fixed;
+    position: absolute;
     bottom: 30px;
     left: 30px;
     display: flex;
