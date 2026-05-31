@@ -804,7 +804,7 @@ def simulate():
     try:
         result = sim.run(
             bounds, arcgis_token,
-            algorithm=data.get('algorithm', 'exp-hand'),
+            algorithm=data.get('algorithm', 'test-algo'),
             river_threshold_pct=data.get('river_threshold', 95),
             display_threshold_pct=data.get('display_threshold', 50),
             precipitation=data.get('precipitation', 25),

@@ -437,7 +437,7 @@ def compute_arcgis_flood(dem, river_mask, transform,
 
 def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0,
         river_threshold_pct=95, display_threshold_pct=50,
-        algorithm='exp-hand',
+        algorithm='test-algo',
         precipitation=25, duration=6,
         infiltration=10, manning_n=0.04, soil_type='loam',
         resolution='medium'):
@@ -527,12 +527,17 @@ def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0,
         )
         method_name = 'test-algo'
     else:
-        flood_score = compute_flood_susceptibility(
-            dem, river_mask, transform,
+        osm_json = fetch_osm_rivers(expanded_bounds)
+        osm_mask, osm_weight = rasterize_river_geojson(osm_json, transform, dem.shape)
+        if not osm_mask.any():
+            osm_mask = river_mask
+            osm_weight = np.where(river_mask, 1.0, 0.0)
+        flood_score = compute_test_algo(
+            dem, osm_mask, osm_weight, transform,
             decay_length_m=decay_length_L,
             max_flood_height_m=max_flood_height_H
         )
-        method_name = 'exp-hand'
+        method_name = 'test-algo'
 
     inv_transform = ~transform
     col0, row0 = inv_transform * (bounds['minLng'], bounds['maxLat'])
