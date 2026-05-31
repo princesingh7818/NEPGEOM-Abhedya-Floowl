@@ -20,12 +20,7 @@ pkgs.mkShell {
     echo "=========================================================="
 
     if [ -d frontend ]; then
-      has_manifest=0
-      if [ -f frontend/package.json ] || [ -f frontend/package.json ]; then
-        has_manifest=1
-      fi
-
-      if [ "$has_manifest" -eq 1 ]; then
+      if [ -f frontend/package.json ]; then
         if [ ! -d frontend/node_modules ]; then
           echo "Installing frontend npm dependencies (first run)..."
           npm install --prefix frontend
@@ -33,7 +28,7 @@ pkgs.mkShell {
           echo "Frontend npm dependencies already installed."
         fi
       elif [ -f frontend/package-lock.json ]; then
-        echo "Found frontend/package-lock.json but no package.json/package.jason; skipping npm install."
+        echo "Found frontend/package-lock.json but no package.json; skipping npm install."
       else
         echo "No frontend package manifest found; skipping npm install."
       fi

@@ -3,21 +3,9 @@ from flask_cors import CORS
 import sqlite3
 import json
 import os
-import csv
-import shutil
-from datetime import datetime, timezone
 from urllib import request as urlrequest
 from urllib import parse as urlparse
 from urllib.error import URLError, HTTPError
-
-try:
-    import numpy as np
-    import rasterio
-    from rasterio.transform import from_bounds
-except ImportError:
-    np = None
-    rasterio = None
-    from_bounds = None
 
 frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../frontend')
 app = Flask(__name__, static_folder=frontend_dir)
@@ -26,44 +14,9 @@ app.url_map.strict_slashes = False
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database.sqlite')
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../api/config.json')
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../cache')
-
-
-def env_int(name, default):
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-        return value if value > 1 else default
-    except (TypeError, ValueError):
-        return default
-
-
-DEPTH_GRID_COLS = env_int('DEPTH_GRID_COLS', 32)
-DEPTH_GRID_ROWS = env_int('DEPTH_GRID_ROWS', 32)
-
-
-def reset_cache_dir():
-    if os.path.isdir(CACHE_DIR):
-        shutil.rmtree(CACHE_DIR)
-    os.makedirs(CACHE_DIR, exist_ok=True)
-
-
-def load_mapbox_key():
-    if not os.path.exists(CONFIG_PATH):
-        return None
-
-    try:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    token = data.get('MAPBOX_KEY')
-    if not token or token == 'YOUR_MAPBOX_ACCESS_TOKEN_HERE':
-        return None
-    return token
+ARCGIS_RIVERS_QUERY_URL = 'https://services-ap1.arcgis.com/iA7fZQOnjY9D67Zx/arcgis/rest/services/OSM_AS_Waterways/FeatureServer/0/query'
+ARCGIS_MIN_QUERY_SPAN_DEG = 0.06
+ARCGIS_QUERY_PADDING_RATIO = 0.45
 
 
 def region_bounds_from_geometry(geometry):
@@ -100,164 +53,241 @@ def region_bounds_from_geometry(geometry):
     }
 
 
-def mapbox_tilequery_elevation(lng, lat, token):
-    query_url = (
-        f"https://api.mapbox.com/v4/mapbox.mapbox-terrain-v2/tilequery/{lng},{lat}.json?"
-        + urlparse.urlencode({
-            'layers': 'contour',
-            'limit': 1,
-            'access_token': token
-        })
+def expanded_query_bounds(bounds, min_span_deg=ARCGIS_MIN_QUERY_SPAN_DEG, padding_ratio=ARCGIS_QUERY_PADDING_RATIO):
+    span_lng = bounds['maxLng'] - bounds['minLng']
+    span_lat = bounds['maxLat'] - bounds['minLat']
+
+    center_lng = (bounds['minLng'] + bounds['maxLng']) / 2
+    center_lat = (bounds['minLat'] + bounds['maxLat']) / 2
+
+    target_span_lng = max(span_lng, min_span_deg)
+    target_span_lat = max(span_lat, min_span_deg)
+
+    half_lng = (target_span_lng / 2) * (1 + padding_ratio)
+    half_lat = (target_span_lat / 2) * (1 + padding_ratio)
+
+    return {
+        'minLng': center_lng - half_lng,
+        'minLat': center_lat - half_lat,
+        'maxLng': center_lng + half_lng,
+        'maxLat': center_lat + half_lat
+    }
+
+
+def _cohen_sutherland_code(x, y, bounds):
+    code = 0
+    if x < bounds['minLng']:
+        code |= 1
+    elif x > bounds['maxLng']:
+        code |= 2
+    if y < bounds['minLat']:
+        code |= 4
+    elif y > bounds['maxLat']:
+        code |= 8
+    return code
+
+
+def clip_segment_to_bounds(p1, p2, bounds):
+    x1, y1 = float(p1[0]), float(p1[1])
+    x2, y2 = float(p2[0]), float(p2[1])
+
+    code1 = _cohen_sutherland_code(x1, y1, bounds)
+    code2 = _cohen_sutherland_code(x2, y2, bounds)
+
+    while True:
+        if not (code1 | code2):
+            return [[x1, y1], [x2, y2]]
+        if code1 & code2:
+            return None
+
+        out_code = code1 or code2
+        if out_code & 8:
+            if y2 == y1:
+                return None
+            x = x1 + (x2 - x1) * (bounds['maxLat'] - y1) / (y2 - y1)
+            y = bounds['maxLat']
+        elif out_code & 4:
+            if y2 == y1:
+                return None
+            x = x1 + (x2 - x1) * (bounds['minLat'] - y1) / (y2 - y1)
+            y = bounds['minLat']
+        elif out_code & 2:
+            if x2 == x1:
+                return None
+            y = y1 + (y2 - y1) * (bounds['maxLng'] - x1) / (x2 - x1)
+            x = bounds['maxLng']
+        else:
+            if x2 == x1:
+                return None
+            y = y1 + (y2 - y1) * (bounds['minLng'] - x1) / (x2 - x1)
+            x = bounds['minLng']
+
+        if out_code == code1:
+            x1, y1 = x, y
+            code1 = _cohen_sutherland_code(x1, y1, bounds)
+        else:
+            x2, y2 = x, y
+            code2 = _cohen_sutherland_code(x2, y2, bounds)
+
+
+def clip_linestring_to_bounds(coords, bounds):
+    if not isinstance(coords, list) or len(coords) < 2:
+        return []
+
+    clipped_paths = []
+    current_path = []
+
+    for i in range(len(coords) - 1):
+        a = coords[i]
+        b = coords[i + 1]
+        if not (isinstance(a, list) and isinstance(b, list) and len(a) >= 2 and len(b) >= 2):
+            continue
+
+        segment = clip_segment_to_bounds(a, b, bounds)
+        if segment is None:
+            if len(current_path) >= 2:
+                clipped_paths.append(current_path)
+            current_path = []
+            continue
+
+        seg_start, seg_end = segment
+        if not current_path:
+            current_path = [seg_start, seg_end]
+        else:
+            last = current_path[-1]
+            if abs(last[0] - seg_start[0]) < 1e-12 and abs(last[1] - seg_start[1]) < 1e-12:
+                current_path.append(seg_end)
+            else:
+                if len(current_path) >= 2:
+                    clipped_paths.append(current_path)
+                current_path = [seg_start, seg_end]
+
+    if len(current_path) >= 2:
+        clipped_paths.append(current_path)
+
+    return clipped_paths
+
+
+def clip_geojson_to_bounds(geojson, bounds):
+    features = []
+    for feature in geojson.get('features', []):
+        if not isinstance(feature, dict):
+            continue
+        geometry = feature.get('geometry') if isinstance(feature.get('geometry'), dict) else {}
+        if geometry.get('type') != 'LineString':
+            continue
+        coords = geometry.get('coordinates')
+        clipped_paths = clip_linestring_to_bounds(coords, bounds)
+
+        for clipped_coords in clipped_paths:
+            features.append({
+                'type': 'Feature',
+                'geometry': {
+                    'type': 'LineString',
+                    'coordinates': clipped_coords
+                },
+                'properties': feature.get('properties', {})
+            })
+
+    return {
+        'type': 'FeatureCollection',
+        'features': features
+    }
+
+
+def arcgis_query_rivers(bounds):
+    query_bounds = expanded_query_bounds(bounds)
+
+    params = {
+        'f': 'json',
+        'where': "waterway IN ('river','stream','canal','drain')",
+        'outFields': 'OBJECTID,name,name_en,waterway',
+        'returnGeometry': 'true',
+        'geometryType': 'esriGeometryEnvelope',
+        'geometry': f"{query_bounds['minLng']},{query_bounds['minLat']},{query_bounds['maxLng']},{query_bounds['maxLat']}",
+        'inSR': '4326',
+        'spatialRel': 'esriSpatialRelIntersects',
+        'outSR': '4326'
+    }
+
+    request_url = f"{ARCGIS_RIVERS_QUERY_URL}?{urlparse.urlencode(params)}"
+    req = urlrequest.Request(
+        request_url,
+        headers={'Accept': 'application/json'},
+        method='GET'
     )
 
-    req = urlrequest.Request(query_url, headers={'Accept': 'application/json'})
-    with urlrequest.urlopen(req, timeout=8) as response:
+    with urlrequest.urlopen(req, timeout=30) as response:
         body = response.read().decode('utf-8')
     payload = json.loads(body)
-    features = payload.get('features', [])
-    if not features:
-        return None
 
-    properties = features[0].get('properties', {})
-    elev = properties.get('ele')
-    if elev is None:
-        return None
+    if isinstance(payload, dict) and payload.get('error'):
+        raise ValueError(payload['error'].get('message', 'ArcGIS query failed'))
+
+    return payload
+
+
+def arcgis_to_geojson(payload):
+    features = []
+    for element in payload.get('features', []):
+        if not isinstance(element, dict):
+            continue
+
+        geometry = element.get('geometry') if isinstance(element.get('geometry'), dict) else {}
+        paths = geometry.get('paths')
+        if not isinstance(paths, list):
+            continue
+
+        attributes = element.get('attributes') if isinstance(element.get('attributes'), dict) else {}
+
+        for path in paths:
+            if not isinstance(path, list) or len(path) < 2:
+                continue
+
+            coords = []
+            for point in path:
+                if not isinstance(point, list) or len(point) < 2:
+                    continue
+                try:
+                    coords.append([float(point[0]), float(point[1])])
+                except (TypeError, ValueError):
+                    continue
+
+            if len(coords) < 2:
+                continue
+
+            features.append({
+                'type': 'Feature',
+                'geometry': {
+                    'type': 'LineString',
+                    'coordinates': coords
+                },
+                'properties': {
+                    'arcgis_id': attributes.get('OBJECTID') or attributes.get('objectid'),
+                    'waterway': attributes.get('waterway'),
+                    'name': attributes.get('name') or attributes.get('name_en')
+                }
+            })
+
+    return {
+        'type': 'FeatureCollection',
+        'features': features
+    }
+
+
+def fetch_region_rivers(geometry):
+    bounds = region_bounds_from_geometry(geometry)
+    if bounds is None:
+        return {'type': 'FeatureCollection', 'features': []}
 
     try:
-        return float(elev)
-    except (TypeError, ValueError):
-        return None
+        arcgis_payload = arcgis_query_rivers(bounds)
+    except (URLError, HTTPError, TimeoutError, json.JSONDecodeError, ValueError) as error:
+        print(f'ArcGIS rivers query failed: {error}')
+        return {'type': 'FeatureCollection', 'features': []}
 
-
-def depth_map_paths(region_id):
-    base = os.path.join(CACHE_DIR, f'region_{region_id}_depth_map')
-    return {
-        'json': base + '.json',
-        'csv': base + '.csv',
-        'tif': base + '.tif'
-    }
-
-
-def write_depth_map_files(region_id, name, geometry):
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    paths = depth_map_paths(region_id)
-    bounds = region_bounds_from_geometry(geometry)
-
-    result = {
-        'region_id': region_id,
-        'name': name,
-        'generated_at': datetime.now(timezone.utc).isoformat(),
-        'bounds': bounds,
-        'grid': {
-            'rows': DEPTH_GRID_ROWS,
-            'cols': DEPTH_GRID_COLS
-        },
-        'status': 'ok',
-        'message': '',
-        'values_m': []
-    }
-
-    if bounds is None:
-        result['status'] = 'error'
-        result['message'] = 'Invalid region geometry'
-    else:
-        token = load_mapbox_key()
-        if not token:
-            result['status'] = 'error'
-            result['message'] = 'MAPBOX_KEY missing or invalid; depth map not generated'
-        else:
-            min_lng = bounds['minLng']
-            max_lng = bounds['maxLng']
-            min_lat = bounds['minLat']
-            max_lat = bounds['maxLat']
-
-            lng_step = (max_lng - min_lng) / (DEPTH_GRID_COLS - 1) if DEPTH_GRID_COLS > 1 else 0
-            lat_step = (max_lat - min_lat) / (DEPTH_GRID_ROWS - 1) if DEPTH_GRID_ROWS > 1 else 0
-
-            had_error = False
-            for row_idx in range(DEPTH_GRID_ROWS):
-                row_values = []
-                lat = max_lat - (row_idx * lat_step)
-
-                for col_idx in range(DEPTH_GRID_COLS):
-                    lng = min_lng + (col_idx * lng_step)
-                    try:
-                        elevation = mapbox_tilequery_elevation(lng, lat, token)
-                    except (URLError, HTTPError, TimeoutError, json.JSONDecodeError):
-                        elevation = None
-                        had_error = True
-                    row_values.append(elevation)
-
-                result['values_m'].append(row_values)
-
-            if had_error:
-                result['status'] = 'partial'
-                result['message'] = 'Some elevation samples failed'
-
-    with open(paths['json'], 'w', encoding='utf-8') as json_file:
-        json.dump(result, json_file, indent=2)
-
-    with open(paths['csv'], 'w', newline='', encoding='utf-8') as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(['row', 'col', 'elevation_m'])
-        for row_idx, row in enumerate(result['values_m']):
-            for col_idx, elev in enumerate(row):
-                writer.writerow([row_idx, col_idx, '' if elev is None else elev])
-
-    if (
-        bounds is not None and
-        np is not None and
-        rasterio is not None and
-        from_bounds is not None and
-        result['values_m']
-    ):
-        rows = len(result['values_m'])
-        cols = len(result['values_m'][0]) if rows > 0 else 0
-        if rows > 0 and cols > 0:
-            arr = np.full((rows, cols), np.nan, dtype='float32')
-            for r_idx, row in enumerate(result['values_m']):
-                for c_idx, elev in enumerate(row):
-                    if elev is not None:
-                        arr[r_idx, c_idx] = float(elev)
-
-            transform = from_bounds(
-                bounds['minLng'],
-                bounds['minLat'],
-                bounds['maxLng'],
-                bounds['maxLat'],
-                cols,
-                rows
-            )
-            nodata_val = np.float32(-9999.0)
-            arr_to_write = np.where(np.isnan(arr), nodata_val, arr).astype('float32')
-
-            with rasterio.open(
-                paths['tif'],
-                'w',
-                driver='GTiff',
-                height=rows,
-                width=cols,
-                count=1,
-                dtype='float32',
-                crs='EPSG:4326',
-                transform=transform,
-                nodata=float(nodata_val)
-            ) as dataset:
-                dataset.write(arr_to_write, 1)
-    else:
-        if np is None or rasterio is None or from_bounds is None:
-            if result['status'] == 'ok':
-                result['status'] = 'partial'
-            if not result['message']:
-                result['message'] = 'GeoTIFF generation skipped: raster dependencies unavailable'
-
-    return {
-        'json': os.path.relpath(paths['json'], start=os.path.dirname(DB_PATH)),
-        'csv': os.path.relpath(paths['csv'], start=os.path.dirname(DB_PATH)),
-        'tif': os.path.relpath(paths['tif'], start=os.path.dirname(DB_PATH)) if os.path.exists(paths['tif']) else None,
-        'status': result['status'],
-        'message': result['message']
-    }
+    rivers_geojson = arcgis_to_geojson(arcgis_payload)
+    return clip_geojson_to_bounds(rivers_geojson, bounds)
 
 
 def normalize_polygon_geometry(geometry):
@@ -420,7 +450,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-reset_cache_dir()
 init_db()
 
 @app.route('/api/config', methods=['GET'], strict_slashes=False)
@@ -544,15 +573,12 @@ def regions():
     region_id = c.lastrowid
     conn.close()
 
-    depth_map = write_depth_map_files(region_id, name, geometry)
-
     return jsonify({
         'type': 'Feature',
         'geometry': geometry,
         'properties': {
             'id': region_id,
-            'name': name,
-            'depthMap': depth_map
+            'name': name
         }
     })
 
@@ -567,11 +593,6 @@ def region_item(region_id):
         c.execute('DELETE FROM region WHERE id = ?', (region_id,))
         conn.commit()
         conn.close()
-
-        paths = depth_map_paths(region_id)
-        for target in paths.values():
-            if os.path.exists(target):
-                os.remove(target)
 
         return jsonify({'success': True})
 
@@ -593,17 +614,47 @@ def region_item(region_id):
     conn.commit()
     conn.close()
 
-    depth_map = write_depth_map_files(region_id, name, geometry)
-
     return jsonify({
         'type': 'Feature',
         'geometry': geometry,
         'properties': {
             'id': region_id,
-            'name': name,
-            'depthMap': depth_map
+            'name': name
         }
     })
+
+
+@app.route('/api/regions/<int:region_id>/rivers', methods=['GET'], strict_slashes=False)
+def region_rivers(region_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute('SELECT geometry FROM region WHERE id = ?', (region_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if row is None:
+        return jsonify({'error': 'Region not found'}), 404
+
+    try:
+        geometry = json.loads(row['geometry'])
+    except (TypeError, json.JSONDecodeError):
+        return jsonify({'error': 'Invalid region geometry'}), 500
+
+    rivers_geojson = fetch_region_rivers(geometry)
+    return jsonify(rivers_geojson)
+
+
+@app.route('/api/rivers', methods=['POST'], strict_slashes=False)
+def rivers_for_geometry():
+    data = request.json or {}
+    geometry = parse_region_geometry_from_request(data)
+
+    if geometry is None:
+        return jsonify({'error': 'Please provide valid rectangle bounds or Polygon geometry'}), 400
+
+    rivers_geojson = fetch_region_rivers(geometry)
+    return jsonify(rivers_geojson)
 
 
 @app.route('/')
