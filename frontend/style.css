@@ -35,6 +35,56 @@ body, html {
     overflow-y: auto;
 }
 
+/* Map controls (2D/3D, zoom, compass) */
+#map-controls {
+    position: absolute;
+    bottom: 30px;
+    left: 25px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 10;
+}
+
+.map-control-btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    color: #333;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    cursor: pointer;
+    font-size: 1.1rem;
+    font-weight: 700;
+    transition: background 0.15s, box-shadow 0.15s;
+    line-height: 1;
+}
+
+.map-control-btn:hover {
+    background: #f0f0f0;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.2);
+}
+
+.map-control-btn:active {
+    background: #e0e0e0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+#btn-3d.active {
+    background: #007bff;
+    color: #fff;
+    border-color: #007bff;
+}
+
+#btn-compass {
+    font-size: 1.2rem;
+}
+
 #ui-box h2 {
     margin-bottom: 15px;
     font-size: 1.2rem;

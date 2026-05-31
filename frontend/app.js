@@ -1922,6 +1922,45 @@ async function initializeApp() {
             fetchRegions();
         });
 
+        // --- Map controls (2D/3D, zoom, compass) ---
+        const btn3d = document.getElementById('btn-3d');
+        const btnZoomIn = document.getElementById('btn-zoom-in');
+        const btnZoomOut = document.getElementById('btn-zoom-out');
+        const btnCompass = document.getElementById('btn-compass');
+
+        let is3D = true;
+
+        function setViewMode3D(enable) {
+            if (enable) {
+                map.setPitch(45);
+                enableTerrainVisualization();
+                btn3d.textContent = '3D';
+                btn3d.classList.add('active');
+            } else {
+                map.setPitch(0);
+                map.setTerrain(null);
+                btn3d.textContent = '2D';
+                btn3d.classList.remove('active');
+            }
+            is3D = enable;
+        }
+
+        if (btn3d) {
+            btn3d.classList.add('active');
+            btn3d.addEventListener('click', () => setViewMode3D(!is3D));
+        }
+        if (btnZoomIn) {
+            btnZoomIn.addEventListener('click', () => map.zoomIn({ duration: 300 }));
+        }
+        if (btnZoomOut) {
+            btnZoomOut.addEventListener('click', () => map.zoomOut({ duration: 300 }));
+        }
+        if (btnCompass) {
+            btnCompass.addEventListener('click', () => {
+                map.easeTo({ bearing: 0, duration: 300 });
+            });
+        }
+
         // Catch map load errors
         map.on('error', (e) => {
             console.error("Mapbox error:", e.error);
