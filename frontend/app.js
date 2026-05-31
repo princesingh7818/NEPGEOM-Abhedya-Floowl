@@ -1881,21 +1881,21 @@ async function initializeApp() {
         });
 
         map.once('load', () => {
-            map.flyTo({
-                center: KU_CENTER,
-                zoom: 14,
-                pitch: 45,
-                bearing: -17.6,
-                duration: 5000
-            });
             setTimeout(() => {
                 const overlay = document.getElementById('welcome-overlay');
                 if (overlay) overlay.classList.add('fade-out');
-            }, 2000);
+                map.flyTo({
+                    center: KU_CENTER,
+                    zoom: 14,
+                    pitch: 45,
+                    bearing: -17.6,
+                    duration: 5000
+                });
+            }, 1500);
             setTimeout(() => {
                 const overlay = document.getElementById('welcome-overlay');
                 if (overlay) overlay.style.display = 'none';
-            }, 3500);
+            }, 3000);
         });
 
         // Update input fields on map click
