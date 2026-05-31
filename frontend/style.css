@@ -42,12 +42,21 @@ body, html {
     width: 100vw;
     height: 100vh;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     pointer-events: none;
     z-index: 9999;
     background: rgba(0,0,0,0.55);
     transition: opacity 1.2s ease;
+}
+
+#welcome-overlay #welcome-sub {
+    position: absolute;
+    bottom: 40px;
+    left: 0;
+    width: 100%;
+    text-align: center;
 }
 
 #welcome-overlay.fade-out {
@@ -72,7 +81,6 @@ body, html {
     color: rgba(255,255,255,0.85);
     text-shadow: 0 2px 20px rgba(0,0,0,0.5);
     letter-spacing: 1px;
-    margin-top: 8px;
 }
 
 @media (max-width: 640px) {
