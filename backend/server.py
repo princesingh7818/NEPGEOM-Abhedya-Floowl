@@ -802,7 +802,17 @@ def simulate():
         arcgis_token = ''
 
     try:
-        result = sim.run(bounds, arcgis_token)
+        result = sim.run(
+            bounds, arcgis_token,
+            river_threshold_pct=data.get('river_threshold', 95),
+            display_threshold_pct=data.get('display_threshold', 75),
+            precipitation=data.get('precipitation', 25),
+            duration=data.get('duration', 6),
+            infiltration=data.get('infiltration', 10),
+            manning_n=data.get('manning', 0.04),
+            soil_type=data.get('soil', 'loam'),
+            resolution=data.get('resolution', 'medium')
+        )
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

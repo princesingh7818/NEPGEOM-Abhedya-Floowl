@@ -1748,7 +1748,11 @@ async function initializeApp() {
         const display = document.getElementById(displayId);
         if (input && display) {
             input.addEventListener('input', () => {
-                display.textContent = input.value + ' ' + suffix;
+                if (typeof suffix === 'function') {
+                    display.textContent = suffix(input.value);
+                } else {
+                    display.textContent = input.value + ' ' + suffix;
+                }
             });
         }
     }
@@ -1756,6 +1760,9 @@ async function initializeApp() {
     wireRangeDisplay('param-duration', 'duration-value', 'hrs');
     wireRangeDisplay('param-infiltration', 'infiltration-value', 'mm/hr');
     wireRangeDisplay('param-river-threshold', 'river-threshold-value', 'th percentile');
+    wireRangeDisplay('param-display-threshold', 'display-threshold-value', function(v) {
+        return 'Show top ' + (100 - parseInt(v)) + '%';
+    });
 
     // Complex simulation run
     const runComplexBtn = document.getElementById('run-complex-btn');
@@ -1789,7 +1796,8 @@ async function initializeApp() {
                         manning: parseFloat(document.getElementById('param-manning').value),
                         soil: document.getElementById('param-soil').value,
                         resolution: document.getElementById('param-resolution').value,
-                        river_threshold: parseInt(document.getElementById('param-river-threshold').value)
+                        river_threshold: parseInt(document.getElementById('param-river-threshold').value),
+                        display_threshold: parseInt(document.getElementById('param-display-threshold').value)
                     })
                 });
                 const payload = await parseJsonResponse(response);

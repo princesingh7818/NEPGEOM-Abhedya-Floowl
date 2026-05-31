@@ -159,10 +159,76 @@ def compute_river_proximity_and_hand(river_mask, dem, max_dist_pixels=120):
     return dist, hand
 
 
-def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0):
+def compute_flood_spread(dem, river_mask, river_rise=2.0, max_iter=80, diffusion=0.03):
+    """
+    Simulate flood water spreading outward from river channels.
+    
+    Water starts at river cells at elevation + river_rise, then spreads
+    to adjacent cells if their elevation is ≤ incoming water level.
+    Water level drops by `diffusion` per step, creating a natural
+    outward decay.  Returns flood depth at every cell.
+    """
+    ny, nx = dem.shape
+    NEG_INF = -1e10
+
+    water_level = np.full((ny, nx), NEG_INF, dtype=np.float64)
+    water_level[river_mask] = dem[river_mask] + river_rise
+    flooded = river_mask.copy()
+
+    for iteration in range(max_iter):
+        if not flooded.any():
+            break
+
+        pad_flooded = np.pad(flooded, 1, mode='constant', constant_values=False)
+        pad_water = np.pad(water_level, 1, mode='constant', constant_values=NEG_INF)
+
+        new_flooded = np.zeros_like(flooded, dtype=bool)
+
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+
+                nbr_fld = pad_flooded[1+dr:1+dr+ny, 1+dc:1+dc+nx]
+                nbr_wat = pad_water[1+dr:1+dr+ny, 1+dc:1+dc+nx]
+
+                adjacent = nbr_fld & ~flooded
+                incoming = nbr_wat - diffusion
+
+                can_flood = adjacent & (dem <= incoming)
+                new_wl = np.maximum(dem, incoming)
+
+                update = can_flood & (new_wl > water_level)
+                water_level = np.where(update, new_wl, water_level)
+                new_flooded = new_flooded | update
+
+        flooded = flooded | new_flooded
+        if not new_flooded.any():
+            break
+
+    flood_depth = np.maximum(water_level - dem, 0)
+    return flood_depth
+
+
+def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0,
+        river_threshold_pct=95, display_threshold_pct=75,
+        precipitation=25, duration=6,
+        infiltration=10, manning_n=0.04, soil_type='loam',
+        resolution='medium'):
     if output_dir is None:
         output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cache')
     os.makedirs(output_dir, exist_ok=True)
+
+    soil_infiltration_map = {
+        'sand': 25, 'loam': 10, 'clay': 3, 'rock': 1
+    }
+    effective_infiltration = infiltration if infiltration > 0 else soil_infiltration_map.get(soil_type, 10)
+
+    effective_rain = max(0, precipitation - effective_infiltration) * duration
+    manning_factor = np.clip(manning_n / 0.04, 0.5, 2.5)
+
+    res_map = {'low': 512, 'medium': 1024, 'high': 2048}
+    dem_size = res_map.get(resolution, 1024)
 
     center_lng = (bounds['minLng'] + bounds['maxLng']) / 2
     center_lat = (bounds['minLat'] + bounds['maxLat']) / 2
@@ -176,21 +242,27 @@ def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0):
         'maxLat': center_lat + expand_factor * half_lat,
     }
 
-    dem, transform, dem_bounds = download_dem_arcgis(expanded_bounds)
+    dem, transform, dem_bounds = download_dem_arcgis(expanded_bounds,
+                                                     width=dem_size, height=dem_size)
 
     u_norm, v_norm, mag, _ = compute_velocity_field(dem)
     flow_acc = compute_flow_accumulation_mfd(dem, u_norm, v_norm)
 
-    river_threshold = np.percentile(flow_acc, 95)
+    river_threshold = np.percentile(flow_acc, river_threshold_pct)
     river_mask = flow_acc >= river_threshold
 
     if not river_mask.any():
         river_mask = np.zeros_like(flow_acc, dtype=bool)
         river_mask[flow_acc == flow_acc.max()] = True
 
-    max_river_pixels = 120
-    river_dist, hand = compute_river_proximity_and_hand(
-        river_mask, dem, max_dist_pixels=max_river_pixels
+    # Flood spread: water rises from rivers and spreads outward
+    river_rise = np.clip(1.0 + effective_rain / 300.0, 1.0, 8.0)
+    max_iter = 80
+    flood_depth = compute_flood_spread(
+        dem, river_mask,
+        river_rise=river_rise,
+        max_iter=max_iter,
+        diffusion=np.clip(0.03 * manning_factor, 0.01, 0.10)
     )
 
     inv_transform = ~transform
@@ -204,30 +276,9 @@ def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0):
     if col1 > col0 and row1 > row0:
         dem_crop = dem[row0:row1, col0:col1].astype(np.float64)
         mag_crop = mag[row0:row1, col0:col1].astype(np.float64)
-        river_dist_crop = river_dist[row0:row1, col0:col1]
-        hand_crop = hand[row0:row1, col0:col1]
+        flood_crop = flood_depth[row0:row1, col0:col1]
 
-        near_river = river_dist_crop <= max_river_pixels
-        flood_score = np.zeros_like(dem_crop)
-
-        if near_river.any():
-            max_hand = min(np.percentile(hand_crop[near_river], 90), 50.0)
-            if max_hand < 0.5:
-                max_hand = 0.5
-
-            hand_score = np.clip(1.0 - hand_crop / max_hand, 0, 1)
-
-            max_dist = float(max_river_pixels)
-            dist_score = np.clip(1.0 - river_dist_crop / max_dist, 0, 1)
-
-            slope_max = max(np.percentile(mag_crop[near_river], 90), 1e-4)
-            inv_slope = np.clip(1.0 - mag_crop / slope_max, 0, 1)
-
-            flood_score = np.where(
-                near_river,
-                0.50 * hand_score + 0.30 * dist_score + 0.20 * inv_slope,
-                -1.0
-            )
+        flood_score = np.where(flood_crop > 0.01, flood_crop, -1.0)
 
         MARGIN = 2
         flood_score[:MARGIN, :] = -1
@@ -238,16 +289,19 @@ def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0):
         valid = flood_score >= 0
         fsv = flood_score[valid]
         if fsv.size > 0:
-            threshold = np.percentile(fsv, 75)
+            dmax = float(np.percentile(fsv, 99))
+            if dmax < 0.01:
+                dmax = float(np.max(fsv)) if fsv.size > 0 else 0.01
         else:
-            threshold = 0.5
+            dmax = 0.01
 
-        display = np.where(flood_score >= threshold, flood_score, -1)
-        dmax = display.max()
-        if dmax > threshold:
-            normed = np.clip((display - threshold) / (dmax - threshold + 1e-10), 0, 1)
+        low = dmax * (display_threshold_pct / 100.0)
+        if dmax > low:
+            normed = np.clip((flood_score - low) / (dmax - low + 1e-10), 0, 1)
         else:
-            normed = np.zeros_like(display)
+            normed = np.zeros_like(flood_score)
+
+        normed = np.where(flood_score < 0, 0, normed)
 
         R = np.where(normed > 0, (255 - 116 * normed).astype(np.uint8), 0)
         G = np.where(normed > 0, (150 * (1 - normed)).astype(np.uint8), 0)
@@ -285,10 +339,24 @@ def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0):
         'bounds': bounds,
         'expanded_bounds': expanded_bounds,
         'shape': list(dem.shape) if png_filename else None,
-        'method': 'riverine_hand_susceptibility',
-        'river_threshold_percentile': 95,
-        'max_river_distance_pixels': max_river_pixels,
-        'weights': {'hand': 0.50, 'river_distance': 0.30, 'slope': 0.20},
+        'method': 'flood_spread_susceptibility',
+        'params': {
+            'river_threshold_percentile': river_threshold_pct,
+            'display_threshold_pct': display_threshold_pct,
+            'precipitation_mm_hr': precipitation,
+            'duration_hrs': duration,
+            'infiltration_mm_hr': effective_infiltration,
+            'manning_n': manning_n,
+            'manning_factor': round(manning_factor, 3),
+            'soil_type': soil_type,
+            'resolution': resolution,
+            'dem_size': dem_size,
+            'effective_rain_mm': effective_rain,
+            'river_rise_m': round(river_rise, 2),
+            'diffusion': round(np.clip(0.03 * manning_factor, 0.01, 0.10), 4),
+            'flood_max_depth_m': round(dmax, 2)
+        },
+        'max_river_distance_pixels': max_iter,
         'expand_factor': expand_factor,
         'velocity_range': {
             'u_min': float(np.min(u_norm)),
