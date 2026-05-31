@@ -1,4 +1,27 @@
-## Web based urban flood simulation system using geospatial Technology for smart and hazard resilient urban planning.
-Rapid urban growth has intensified the risk of urban flooding, as expanding settlements replace natural drainage with impervious surfaces. Traditional planning often fails to anticipate these hazards, leaving cities vulnerable to waterlogging, infrastructure damage, and community disruption. A web-based urban flood simulation system, powered by geospatial technology, offers a practical solution by integrating real-time spatial data, hydrological models, and hazard mapping. Such systems enable planners to visualize flood scenarios, assess the impact of urban expansion, and design smart, resilient strategies for disaster preparedness.
-By combining simulation tools with geospatial analytics, cities can move toward hazard-resilient urban planning, ensuring safer communities, sustainable growth, and improved disaster response capacity.
+# Web based urban flood simulation system using geospatial Technology for smart and hazard resilient urban planning.
+
+## Rapid Urban Growth 
+- Expanding settlements replace natural drainage with impervious surfaces.
+- This intensifies the risk of urban flooding.
+
+## Limitations of Traditional Planning
+- Often fails to anticipate flood hazards.
+- Cities remain vulnerable to waterlogging, infrastructure damage, and community disruption.
+
+## Proposed Solution: Web-Based Flood Simulation
+- Powered by geospatial technology.
+- Integrates real-time spatial data, hydrological models, and hazard mapping.
+
+## Benefits for Urban Planners
+- Visualize flood scenarios under different growth patterns.
+- Assess impacts of urban expansion on flood risk.
+- Design smart, resilient strategies for disaster preparedness.
+
+## Outcome
+- Hazard-resilient urban planning.
+- Safer communities and sustainable growth.
+- Improved disaster response capacity.
+
+
+
 
