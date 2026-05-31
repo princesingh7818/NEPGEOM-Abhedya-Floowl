@@ -222,42 +222,60 @@ def compute_flood_spread(dem, river_mask, transform,
 
 def compute_arcgis_flood(dem, river_mask, transform,
                           river_stage_height=5.0,
-                          hydraulic_diffusivity=50.0,
-                          max_iter=2000):
+                          hydraulic_diffusivity=100.0,
+                          n_timesteps=2000):
     """
-    Steady-state diffusion-wave flood solver (ArcGIS-inspired).
+    Diffusion-wave flood model (ArcGIS-inspired).
     
-    Solves div(K · grad(W)) = 0 via successive averaging with
-    Dirichlet BC at river cells and terrain constraint W ≥ Z.
-    
-    W    = water surface elevation
-    Z    = ground elevation (DEM)
-    D    = W − Z  (flood depth)
+    Explicit 5-point Laplacian scheme with proper metre conversion:
+      STEP 1 — Input: DEM Z, river stage, diffusivity K
+      STEP 2 — River BC: W_river = Z + river_stage_height
+      STEP 3 — Init: W = Z,  W[river] = river_stage
+      STEP 4 — Compute face fluxes: q = −K · grad(W)
+      STEP 5 — Surface update via divergence: W += dt · div(q)
+      STEP 6 — Terrain: W = max(W, Z)
+      STEP 7 — Depth: D = max(W − Z, 0)
     """
     Z = dem.astype(np.float64)
     W = Z.copy()
     W[river_mask] = Z[river_mask] + river_stage_height
 
-    for iteration in range(max_iter):
-        W_old = W.copy()
+    # Pixel size in degrees → metres (latitude-aware)
+    ny, nx = dem.shape
+    px_deg_x = abs(transform.a)
+    px_deg_y = abs(transform.e)
+    center_lat_deg = transform.f + (ny / 2) * transform.e  # e is negative
+    clat = math.radians(center_lat_deg)
+    m_per_deg_x = 111320.0 * math.cos(clat)
+    m_per_deg_y = 111320.0
+    dx_m = math.sqrt(px_deg_x * m_per_deg_x * px_deg_y * m_per_deg_y)
+    dx = max(dx_m, 1.0)
 
-        # Gauss-Seidel averaging for Laplace equation
-        # Interior cells relax toward the mean of their neighbours
-        W[1:-1, 1:-1] = 0.25 * (
-            W_old[0:-2, 1:-1] + W_old[2:, 1:-1] +
-            W_old[1:-1, 0:-2] + W_old[1:-1, 2:]
-        )
+    K = max(hydraulic_diffusivity, 1.0)
+    alpha = K / (dx * dx)  # 1/s
+    dt = 0.2 / max(4 * alpha, 1e-10)  # CFL: α·dt ≤ 0.2/4 for 2D
 
-        # Re-apply Dirichlet BC at river cells
-        W[river_mask] = Z[river_mask] + river_stage_height
+    for step in range(n_timesteps):
+        # STEP 4+5 — 5-point Laplacian (equivalent to -div(q) with face fluxes)
+        d2W = (W[2:, 1:-1] + W[:-2, 1:-1] +
+               W[1:-1, 2:] + W[1:-1, :-2] -
+               4 * W[1:-1, 1:-1]) / (dx * dx)
 
-        # Terrain constraint: water cannot go below ground
-        W = np.maximum(W, Z)
+        W_new = W.copy()
+        W_new[1:-1, 1:-1] += dt * K * d2W
 
-        diff = np.max(np.abs(W - W_old))
+        # STEP 2 — Re-apply Dirichlet BC at river cells
+        W_new[river_mask] = Z[river_mask] + river_stage_height
+
+        # STEP 6 — Terrain constraint
+        W_new = np.maximum(W_new, Z)
+
+        diff = np.max(np.abs(W_new - W))
+        W = W_new
         if diff < 0.001:
             break
 
+    # STEP 7 — Flood depth
     D = np.maximum(W - Z, 0)
     return D
 
@@ -337,7 +355,7 @@ def run(bounds, token, output_dir=None, zoom=None, expand_factor=2.0,
             dem, river_mask, transform,
             river_stage_height=river_stage,
             hydraulic_diffusivity=hyd_diff,
-            max_iter=2000
+            n_timesteps=2000
         )
         flood_score = np.where(flood_depth > 0.01, flood_depth, -1.0)
         method_name = 'arcgis'
