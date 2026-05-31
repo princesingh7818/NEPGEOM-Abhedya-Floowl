@@ -5,6 +5,51 @@
 let map;
 let cachedLocations = [];
 let mapMarkers = []; // Array to store standard Mapbox markers
+let clickPreviewMarker = null;
+
+function setClickPreviewMarker(lng, lat) {
+    if (!map) {
+        return;
+    }
+
+    if (!clickPreviewMarker) {
+        const el = document.createElement('div');
+        el.className = 'custom-marker';
+        clickPreviewMarker = new mapboxgl.Marker({ element: el });
+    }
+
+    clickPreviewMarker
+        .setLngLat([lng, lat])
+        .addTo(map);
+}
+
+function featureToLocation(feature) {
+    if (!feature || feature.type !== 'Feature') {
+        return null;
+    }
+
+    const geometry = feature.geometry;
+    const properties = feature.properties || {};
+
+    if (!geometry || geometry.type !== 'Point' || !Array.isArray(geometry.coordinates) || geometry.coordinates.length !== 2) {
+        return null;
+    }
+
+    const lng = Number(geometry.coordinates[0]);
+    const lat = Number(geometry.coordinates[1]);
+
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+        return null;
+    }
+
+    return {
+        id: properties.id,
+        name: properties.name,
+        lng,
+        lat,
+        geometry
+    };
+}
 
 // DOM Elements
 const locNameInput = document.getElementById('loc-name');
@@ -53,6 +98,7 @@ async function initializeApp() {
         map.on('click', (e) => {
             locLngInput.value = e.lngLat.lng.toFixed(5);
             locLatInput.value = e.lngLat.lat.toFixed(5);
+            setClickPreviewMarker(e.lngLat.lng, e.lngLat.lat);
         });
 
         // Load locations
@@ -80,7 +126,19 @@ async function initializeApp() {
 async function fetchLocations() {
     try {
         const response = await fetch('/api/locations');
-        cachedLocations = await response.json();
+        const payload = await response.json();
+
+        if (payload && payload.type === 'FeatureCollection' && Array.isArray(payload.features)) {
+            cachedLocations = payload.features
+                .map(featureToLocation)
+                .filter((loc) => loc && loc.name);
+        } else if (Array.isArray(payload)) {
+            // Backward compatibility if old API payload is returned
+            cachedLocations = payload;
+        } else {
+            cachedLocations = [];
+        }
+
         renderLocations(cachedLocations);
     } catch (error) {
         console.error('Error fetching locations:', error);
@@ -111,6 +169,10 @@ async function addLocation() {
             locNameInput.value = '';
             locLngInput.value = '';
             locLatInput.value = '';
+            if (clickPreviewMarker) {
+                clickPreviewMarker.remove();
+                clickPreviewMarker = null;
+            }
             fetchLocations(); // Refresh list and markers
         } else {
             const err = await response.json();
