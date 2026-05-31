@@ -20,10 +20,14 @@
                 <input type="number" id="loc-lng" placeholder="Longitude" step="any">
                 <input type="number" id="loc-lat" placeholder="Latitude" step="any">
                 <button id="add-btn">Add Location</button>
+                <button id="select-region-btn" type="button">Select Region</button>
             </div>
             <hr>
             <h3>Saved Locations (Database)</h3>
             <ul id="location-list"></ul>
+            <h3>Saved Regions (Database)</h3>
+            <ul id="region-list"></ul>
+            <p class="region-hint" id="region-hint">Region mode: click two corners on the map.</p>
             <p class="token-warning" id="token-warning">Please enter your Mapbox Token in api/config.json!</p>
         </div>
         

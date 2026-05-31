@@ -73,17 +73,31 @@ button:hover {
     background-color: #0056b3;
 }
 
+#select-region-btn {
+    background-color: #2e7d32;
+}
+
+#select-region-btn:hover {
+    background-color: #1b5e20;
+}
+
+#select-region-btn.active {
+    background-color: #f57c00;
+}
+
 hr {
     margin: 20px 0;
     border: none;
     border-top: 1px solid #eee;
 }
 
-#location-list {
+#location-list,
+#region-list {
     list-style: none;
 }
 
-#location-list li {
+#location-list li,
+#region-list li {
     padding: 8px 0;
     border-bottom: 1px solid #eee;
     font-size: 0.9rem;
@@ -93,23 +107,28 @@ hr {
     align-items: center;
 }
 
-#location-list li .loc-text {
+#location-list li .loc-text,
+#region-list li .loc-text {
     flex-grow: 1;
 }
 
-#location-list li:hover .loc-text {
+#location-list li:hover .loc-text,
+#region-list li:hover .loc-text {
     color: #007bff;
 }
 
-#location-list li .delete-btn {
+#location-list li .delete-btn,
+#region-list li .delete-btn {
     color: #ff4444;
-    font-size: 1.1rem;
+    font-size: 0.95rem;
+    line-height: 1;
     padding: 0 5px;
     opacity: 0.5;
     transition: opacity 0.2s;
 }
 
-#location-list li .delete-btn:hover {
+#location-list li .delete-btn:hover,
+#region-list li .delete-btn:hover {
     opacity: 1;
 }
 
@@ -118,6 +137,13 @@ hr {
     color: #d9534f;
     font-weight: bold;
     font-size: 0.85rem;
+}
+
+.region-hint {
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: #2e7d32;
+    display: none;
 }
 
 /* Custom 3D-looking CSS Marker */
@@ -135,4 +161,26 @@ hr {
 
 .custom-marker:hover {
     transform: rotate(-45deg) scale(1.2);
+}
+
+.region-resize-handle {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fb8c00;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 2px rgba(251, 140, 0, 0.35);
+    cursor: move;
+}
+
+.region-resize-handle.corner-handle {
+    width: 14px;
+    height: 14px;
+}
+
+.region-resize-handle.edge-handle {
+    width: 12px;
+    height: 12px;
+    background: #ffb74d;
+    box-shadow: 0 0 0 2px rgba(255, 183, 77, 0.35);
 }

@@ -24,6 +24,9 @@ backend/database.sqlite
 backend/*.db
 backend/*.sqlite3
 
+# Cache artifacts
+cache/
+
 # OS / System files
 .DS_Store
 .DS_Store?

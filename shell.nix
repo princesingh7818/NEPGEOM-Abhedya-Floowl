@@ -5,8 +5,11 @@ pkgs.mkShell {
     (pkgs.python3.withPackages (ps: with ps; [
       flask
       flask-cors
+      numpy
+      rasterio
     ]))
     pkgs.sqlite
+    pkgs.nodejs
   ];
 
   shellHook = ''
@@ -15,6 +18,28 @@ pkgs.mkShell {
     echo "Python version: $(python --version)"
     echo "SQLite version: $(sqlite3 --version)"
     echo "=========================================================="
+
+    if [ -d frontend ]; then
+      has_manifest=0
+      if [ -f frontend/package.json ] || [ -f frontend/package.json ]; then
+        has_manifest=1
+      fi
+
+      if [ "$has_manifest" -eq 1 ]; then
+        if [ ! -d frontend/node_modules ]; then
+          echo "Installing frontend npm dependencies (first run)..."
+          npm install --prefix frontend
+        else
+          echo "Frontend npm dependencies already installed."
+        fi
+      elif [ -f frontend/package-lock.json ]; then
+        echo "Found frontend/package-lock.json but no package.json/package.jason; skipping npm install."
+      else
+        echo "No frontend package manifest found; skipping npm install."
+      fi
+    else
+      echo "No frontend directory found; skipping npm install."
+    fi
     
     read -p "Would you like to run the website now? (y/n) " -n 1 -r
     echo
