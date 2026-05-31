@@ -1888,6 +1888,14 @@ async function initializeApp() {
                 bearing: -17.6,
                 duration: 5000
             });
+            setTimeout(() => {
+                const overlay = document.getElementById('welcome-overlay');
+                if (overlay) overlay.classList.add('fade-out');
+            }, 2000);
+            setTimeout(() => {
+                const overlay = document.getElementById('welcome-overlay');
+                if (overlay) overlay.style.display = 'none';
+            }, 3500);
         });
 
         // Update input fields on map click
