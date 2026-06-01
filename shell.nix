@@ -33,15 +33,7 @@ pkgs.mkShell {
     else
       echo "No frontend directory found; skipping npm install."
     fi
-    
-    read -p "Would you like to run the website now? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo "Starting the Python server..."
-        python backend/server.py
-    else
-        echo "You are now in the nix shell."
-        echo "To run the server later, run 'python backend/server.py'."
-    fi
+
+    echo "To run the server later, run 'python backend/server.py'."
   '';
 }
