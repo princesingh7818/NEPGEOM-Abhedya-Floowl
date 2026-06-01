@@ -27,9 +27,6 @@ backend/*.sqlite3
 # Cache artifacts
 cache/
 
-# Proprietary algorithm (local-only)
-backend/prop-algo.py
-
 # OS / System files
 .DS_Store
 .DS_Store?
